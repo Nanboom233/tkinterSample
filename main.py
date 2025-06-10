@@ -8,11 +8,14 @@ import matplotlib.pyplot as plt
 import requests
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+import IDGrabber
+
 db_path = 'data.db'
 USER_AGENT = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/135.0.0.0 Mobile Safari/537.36")
 node_name_dicts = {}
 previous_rows = []  # 用于存储上一次查询的结果
+id_dict, leaves_dict = IDGrabber.init_id_dict()
 
 
 def init_tables():
@@ -29,7 +32,8 @@ def init_tables():
         if cursor.fetchone() is None:
             cursor.execute('''
                 CREATE TABLE datasets (
-                    dataset_id TEXT PRIMARY KEY
+                    dataset_id TEXT PRIMARY KEY,
+                    dataset_name TEXT               -- 数据集名称
                 );
             ''')
 
@@ -67,9 +71,9 @@ def init_dataset(dataset_id: str):
         if existing is None:
             # 插入新数据集
             cursor.execute("""
-                    INSERT INTO datasets (dataset_id)
-                    VALUES (?)
-                """, (dataset_id,))
+                    INSERT INTO datasets (dataset_id,dataset_name)
+                    VALUES (?,?)
+                """, (dataset_id, id_dict[dataset_id].name))
     finally:
         conn.commit()
         conn.close()
@@ -113,8 +117,9 @@ def fetch_data():
         # 初始化数据集
         init_dataset(source_name.get())
 
-        response = requests.get(url, headers={'User-Agent': USER_AGENT})
-        print(response.text)
+        response = requests.post(url, headers={'User-Agent': USER_AGENT})
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch data from {url}, status code: {response.status_code}")
 
         returndata = json.loads(response.text)["returndata"]
 
@@ -186,7 +191,8 @@ def retrieve_data():
         text_area.delete(1.0, tk.END)
         if rows:
             for row in rows:
-                text_area.insert(tk.END, f"数据集ID: {row[0]}, 时间: {row[1]}, 名称: {row[2]}, 值: {row[3]}\n")
+                text_area.insert(tk.END, f"数据集: {IDGrabber.get_full_name(row[0], id_dict)}, "
+                                         f"组ID:{row[0]},时间: {row[1]}, 名称: {row[2]}, 值: {row[3]}\n")
         else:
             text_area.insert(tk.END, "未找到匹配的数据。\n")
     except sqlite3.Error as e:
@@ -224,7 +230,7 @@ def visualize_data():
         plt.plot(times, values, marker='o', label=names[0])
         plt.xlabel("时间")
         plt.ylabel("值")
-        plt.title(f"数据集 {search_id.get()} 的可视化")
+        plt.title(f"数据集 {id_dict[search_id.get()].name} 的可视化")
         plt.legend()
         plt.grid(True)
 
@@ -241,7 +247,6 @@ def visualize_data():
         fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
         fig_canvas.get_tk_widget().pack()
         fig_canvas.draw()
-        root.update_idletasks()  # 强制刷新界面
 
     except sqlite3.Error as e:
         messagebox.showerror("Error", f"可视化数据时出错: {e}")
@@ -254,7 +259,7 @@ def create_gui():
     global root, source_name, time_scope, search_id, search_name, text_area
 
     root = tk.Tk()
-    root.title("数据爬取与可视化工具")
+    root.title("国家统计局数据爬取与可视化工具")
 
     tk.Label(root, text="输入对应的表的序号:").pack()
     source_name = tk.Entry(root, width=50)
@@ -294,5 +299,4 @@ def create_gui():
 
 if __name__ == "__main__":
     init_tables()
-    # check_table_structure()  # 如需调试表结构可取消注释
     create_gui()
