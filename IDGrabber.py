@@ -1,12 +1,18 @@
 import json
+import time
 
 import requests
 
 ROOT_ID = "zb"
 id_dict = {}
 leaves_dict = {}
-USER_AGENT = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
-              "Chrome/135.0.0.0 Mobile Safari/537.36")
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36",
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Referer': 'https://data.stats.gov.cn/easyquery.htm',  # 伪造来源页面
+    'X-Requested-With': 'XMLHttpRequest'  # 表明这是一个AJAX请求，很多网站会检查这个
+}
 
 
 class TreeNode:
@@ -20,7 +26,7 @@ class TreeNode:
 def grabID(parent_id: str):
     global id_dict
     url = f"https://data.stats.gov.cn/easyquery.htm?id={parent_id}&dbcode=hgyd&wdcode=zb&m=getTree"
-    response = requests.post(url, headers={'User-Agent': USER_AGENT})
+    response = requests.post(url, headers=HEADERS)
     if response.status_code != 200:
         raise Exception(f"Failed to fetch data from {url}, status code: {response.status_code}")
     data = json.loads(response.text)
@@ -33,7 +39,7 @@ def grabID(parent_id: str):
         )
         if item["isParent"]:
             grabID(item["id"])
-
+    time.sleep(0.1)
 
 def init_id_dict() -> tuple:
     grabID(ROOT_ID)
