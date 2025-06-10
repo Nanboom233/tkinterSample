@@ -12,6 +12,7 @@ db_path = 'data.db'
 USER_AGENT = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/135.0.0.0 Mobile Safari/537.36")
 node_name_dicts = {}
+previous_rows = []  # 用于存储上一次查询的结果
 
 
 def init_tables():
@@ -143,7 +144,6 @@ def fetch_data():
             # 插入数据点到数据库
             insert_data_point(source_name.get(), node_time, node_name, data)
 
-
         # cursor.execute('INSERT INTO data (url, content) VALUES (?, ?)', (url, response.text))
         # conn.commit()
         messagebox.showinfo('Success', 'Data fetched and stored successfully!')
@@ -153,31 +153,105 @@ def fetch_data():
 
 # 从数据库中提取数据
 def retrieve_data():
-    condition = entry_condition.get()
-    cursor.execute('SELECT * FROM data WHERE content LIKE ? LIMIT 10', ('%' + condition + '%',))
-    rows = cursor.fetchall()
-    text_area.delete(1.0, tk.END)
-    for row in rows:
-        text_area.insert(tk.END, f'ID: {row[0]}\nURL: {row[1]}\nContent: {row[2]}\n\n')
+    """从数据库中提取数据并显示在文本区域"""
+    global previous_rows
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        # 查询数据点表中的所有数据
+        cursor.execute("""
+            SELECT dataset_id, time, name, value
+            FROM data_points
+            ORDER BY dataset_id
+        """, ())
+
+        if search_id.get() != "":
+            cursor.execute("""
+                SELECT dataset_id, time, name, value
+                FROM data_points
+                WHERE dataset_id = ?
+                ORDER BY name
+            """, (search_id.get(),))
+
+        if search_name.get() != "":
+            cursor.execute("""
+                        SELECT dataset_id, time, name, value
+                        FROM data_points
+                        WHERE name LIKE ?
+                        ORDER BY time
+                    """, ("%" + search_name.get() + "%",))
+        previous_rows = rows = cursor.fetchall()
+
+        # 清空文本区域并显示查询结果
+        text_area.delete(1.0, tk.END)
+        if rows:
+            for row in rows:
+                text_area.insert(tk.END, f"数据集ID: {row[0]}, 时间: {row[1]}, 名称: {row[2]}, 值: {row[3]}\n")
+        else:
+            text_area.insert(tk.END, "未找到匹配的数据。\n")
+    except sqlite3.Error as e:
+        messagebox.showerror("Error", f"查询数据时出错: {e}")
+    finally:
+        conn.close()
 
 
 # 数据可视化
 def visualize_data():
-    cursor.execute('SELECT content FROM data')
-    data = [row[0] for row in cursor.fetchall()]
-    fig, ax = plt.subplots()
-    ax.plot(data)
-    ax.set_xlabel('Index')
-    ax.set_ylabel('Value')
-    ax.set_title('Data Visualization')
-    canvas = FigureCanvasTkAgg(fig, master=root)
-    canvas.draw()
-    canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+    """可视化数据库中的数据"""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        rows = previous_rows
+
+        if not rows:
+            messagebox.showinfo("Info", "未找到匹配的数据进行可视化。")
+            return
+
+        # 准备数据进行可视化
+        times = [row[1] for row in rows]
+        values = [row[3] for row in rows]
+        names = list(set(f"{row[0]}{row[2]}" for row in rows))  # 获取唯一的指标名称
+
+        if len(names) > 1:
+            messagebox.showerror("Error", "当前仅支持单一指标的可视化。")
+            return
+
+        # 检查是否已有图表，如果没有则创建
+        if not plt.get_fignums():
+            plt.figure(figsize=(10, 5))
+
+        # 在当前图表上绘制
+        plt.plot(times, values, marker='o', label=names[0])
+        plt.xlabel("时间")
+        plt.ylabel("值")
+        plt.title(f"数据集 {search_id.get()} 的可视化")
+        plt.legend()
+        plt.grid(True)
+
+        # 设置字体支持中文
+        plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
+        plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+        # 在Tkinter中显示图表
+        global fig_canvas
+        try:
+            fig_canvas.get_tk_widget().destroy()
+        except Exception:
+            pass
+        fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
+        fig_canvas.get_tk_widget().pack()
+        fig_canvas.draw()
+        root.update_idletasks()  # 强制刷新界面
+
+    except sqlite3.Error as e:
+        messagebox.showerror("Error", f"可视化数据时出错: {e}")
+    finally:
+        conn.close()
 
 
 # GUI界面
 def create_gui():
-    global root, source_name, time_scope, entry_condition, text_area
+    global root, source_name, time_scope, search_id, search_name, text_area
 
     root = tk.Tk()
     root.title("数据爬取与可视化工具")
@@ -196,9 +270,14 @@ def create_gui():
     tk.Button(root, text="爬取数据", command=fetch_data).pack()
 
     # 查询条件输入
-    tk.Label(root, text="查询内容（关键词）:").pack()
-    entry_condition = tk.Entry(root, width=30)
-    entry_condition.pack()
+    tk.Label(root, text="查询内容（表序号）:").pack()
+    search_id = tk.Entry(root, width=30)
+    search_id.pack()
+
+    # 查询条件输入
+    tk.Label(root, text="查询内容（名称）:").pack()
+    search_name = tk.Entry(root, width=30)
+    search_name.pack()
 
     # 查询按钮
     tk.Button(root, text="查询数据", command=retrieve_data).pack()
