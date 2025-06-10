@@ -39,7 +39,7 @@ def grabID(parent_id: str):
         )
         if item["isParent"]:
             grabID(item["id"])
-    time.sleep(0.1)
+    time.sleep(0.05)
 
 def init_id_dict() -> tuple:
     grabID(ROOT_ID)

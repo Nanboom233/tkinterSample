@@ -115,7 +115,7 @@ def fetch_data():
     time_scope_argument = '{"wdcode":"sj","valuecode":"' + time_scope.get() + '"}'
 
     dfwds_argument = f"&dfwds=[{source_name_argument},{time_scope_argument}]"
-    time_argument = f'&k1={time.time()}&h=1'
+    time_argument = f'&k1={int(time.time())}&h=1'
     url = "https://data.stats.gov.cn/easyquery.htm?m=QueryData&dbcode=hgyd&rowcode=zb&colcode=sj&wds=[]" + dfwds_argument + time_argument
 
     try:
