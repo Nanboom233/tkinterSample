@@ -55,13 +55,13 @@ def init_tables():
             WHERE type='table' AND name='datasets'
         """)
         if cursor.fetchone() is None:
+            id_dict, leaf_node_dict = IDGrabber.init_id_dict()
             cursor.execute('''
                 CREATE TABLE datasets (
                     dataset_id TEXT PRIMARY KEY,
                     dataset_name TEXT               -- Name of the dataset
                 );
             ''')
-            id_dict, leaf_node_dict = IDGrabber.init_id_dict()
             for leaf_node_id, leaf_node in leaf_node_dict.items():
                 # Check if the dataset already exists, if not, insert it
                 cursor.execute("SELECT dataset_id FROM datasets WHERE dataset_id = ?", (leaf_node_id,))
