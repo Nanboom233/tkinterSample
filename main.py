@@ -842,14 +842,12 @@ def create_gui():
         all_datasets_dict = {"A01030H": "示例数据"}
 
     dataset_id_input = AutocompleteEntry(dataset_id_frame, completion_dict=all_datasets_dict, width=30)
-    dataset_id_input.insert(0, "A01030H")
     dataset_id_input.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     time_scope_frame = ttk.Frame(fetch_group)
     time_scope_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
     ttk.Label(time_scope_frame, text="时间范围:", width=12).pack(side=tk.LEFT)
     time_scope_input = ttk.Entry(time_scope_frame)
-    time_scope_input.insert(0, "LAST13")
     time_scope_input.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     # --- ** 新增的说明标签 ** ---
