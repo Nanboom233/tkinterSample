@@ -27,7 +27,56 @@ HEADERS = {
     'Referer': 'https://data.stats.gov.cn/easyquery.htm',  # 伪造来源页面
     'X-Requested-With': 'XMLHttpRequest'  # 表明这是一个AJAX请求，很多网站会检查这个
 }
-previous_rows = []  # 用于存储上一次查询的结果
+previous_results = []  # 用于存储上一次查询的结果
+
+# tkinter 组件
+root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area = None, None, None, None, None, None
+
+
+def get_full_name_by_id(dataset_id: str):
+    # Check if the dataset_id exists in the datasets table, and then get its full name
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+                            SELECT dataset_id, dataset_name, dataset_full_name
+                            FROM datasets
+                            WHERE dataset_id = ?
+                        """, (dataset_id,))
+        dataset = cursor.fetchall()
+    except sqlite3.Error as e:
+        messagebox.showerror("数据库错误", f"查询数据时出错: {e}")
+        return ""
+    finally:
+        conn.close()
+
+    if len(dataset) == 0:
+        messagebox.showerror("错误", f"数据集ID {dataset_id} 不存在。")
+        return ""
+    return dataset[0][2]
+
+
+def get_name_by_id(dataset_id: str):
+    # Check if the dataset_id exists in the datasets table, and then get its name
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+                            SELECT dataset_id, dataset_name, dataset_full_name
+                            FROM datasets
+                            WHERE dataset_id = ?
+                        """, (dataset_id,))
+        dataset = cursor.fetchall()
+    except sqlite3.Error as e:
+        messagebox.showerror("数据库错误", f"查询数据时出错: {e}")
+        return ""
+    finally:
+        conn.close()
+
+    if len(dataset) == 0:
+        messagebox.showerror("错误", f"数据集ID {dataset_id} 不存在。")
+        return ""
+    return dataset[0][1]
 
 
 def init_tables():
@@ -58,7 +107,8 @@ def init_tables():
             cursor.execute('''
                 CREATE TABLE datasets (
                     dataset_id TEXT PRIMARY KEY,
-                    dataset_name TEXT               -- Name of the dataset
+                    dataset_name TEXT,            -- Name of the dataset
+                    dataset_full_name TEXT       -- Full name of the dataset, can be used for display
                 );
             ''')
             for leaf_node_id, leaf_node in leaf_node_dict.items():
@@ -67,9 +117,9 @@ def init_tables():
                 existing = cursor.fetchone()
                 if existing is None:
                     cursor.execute("""
-                                   INSERT INTO datasets (dataset_id,dataset_name)
-                                   VALUES (?,?)
-                               """, (leaf_node_id, leaf_node.name))
+                                   INSERT INTO datasets (dataset_id,dataset_name,dataset_full_name)
+                                   VALUES (?,?,?)
+                               """, (leaf_node_id, leaf_node.name, IDGrabber.get_full_name(leaf_node_id, id_dict)))
 
         # Check if the `data_points` table exists, and create it if not
         cursor.execute("""
@@ -90,8 +140,9 @@ def init_tables():
 
         conn.commit()
     except sqlite3.Error as e:
-        print(f"An error occurred: {e.args[0]}")
+        print(f"Database Error: {e.args[0]}")
     finally:
+        print("Finished initializing database tables.")
         conn.close()
 
 
@@ -103,9 +154,6 @@ def fetch_data():
     This function constructs a URL based on user input for dataset ID and time scope, sends a POST request
     to the API, and processes the returned JSON data. The data is then inserted or updated in the `data_points`
     table of the SQLite database.
-
-    Args:
-        None
 
     Raises:
         Exception: If the API request fails or returns a non-200 status code.
@@ -186,42 +234,54 @@ def fetch_data():
 # 从数据库中提取数据
 def retrieve_data():
     """从数据库中提取数据并显示在文本区域"""
-    global previous_rows
+    global previous_results
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    try:
-        # 查询数据点表中的所有数据
-        cursor.execute("""
-            SELECT dataset_id, time, name, value
-            FROM data_points
-            ORDER BY dataset_id
-        """, ())
 
-        if search_id.get() != "":
+    dataset_id = search_id_input.get()
+    search_name = search_name_input.get()
+    search_id = search_id_input.get()
+    try:
+        # step 1: filter by dataset name if specified
+        if search_name != "":
             cursor.execute("""
                 SELECT dataset_id, time, name, value
                 FROM data_points
-                WHERE dataset_id = ?
-                ORDER BY name
-            """, (search_id.get(),))
+                WHERE name LIKE ?
+                ORDER BY time
+            """, (f"%{search_name}%",))
 
-        if search_name.get() != "":
+        else:
+            # 查询数据点表中的所有数据
             cursor.execute("""
-                        SELECT dataset_id, time, name, value
-                        FROM data_points
-                        WHERE name LIKE ?
-                        ORDER BY time
-                    """, ("%" + search_name.get() + "%",))
-        previous_rows = rows = cursor.fetchall()
+                       SELECT dataset_id, time, name, value
+                       FROM data_points
+                       ORDER BY dataset_id
+                   """, ())
+
+        rows = cursor.fetchall()
+
+        # step 2: filter by dataset_id if specified
+        if search_id_input.get() != "":
+            filtered_rows = []
+            for row in rows:
+                if row[0] == search_id_input.get():
+                    filtered_rows.append(row)
+            rows = filtered_rows
+
+        previous_results = rows
 
         # 清空文本区域并显示查询结果
         text_area.delete(1.0, tk.END)
+
+        # step 3: if the rows is not empty, display the results
         if rows:
             for row in rows:
-                text_area.insert(tk.END, f"数据集: {IDGrabber.get_full_name(row[0], id_dict)}, "
+                text_area.insert(tk.END, f"数据集: {get_full_name_by_id(row[0])}, "
                                          f"组ID:{row[0]},时间: {row[1]}, 名称: {row[2]}, 值: {row[3]}\n")
         else:
             text_area.insert(tk.END, "未找到匹配的数据。\n")
+
     except sqlite3.Error as e:
         messagebox.showerror("Error", f"查询数据时出错: {e}")
     finally:
@@ -233,8 +293,9 @@ def visualize_data():
     """可视化数据库中的数据"""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    dataset_id = search_id_input.get()
     try:
-        rows = previous_rows
+        rows = previous_results
 
         if not rows:
             messagebox.showinfo("Info", "未找到匹配的数据进行可视化。")
@@ -257,7 +318,7 @@ def visualize_data():
         plt.plot(times, values, marker='o', label=names[0])
         plt.xlabel("时间")
         plt.ylabel("值")
-        plt.title(f"数据集 {id_dict[search_id.get()].name} 的可视化")
+        plt.title(f"数据集 {get_name_by_id(dataset_id)} 的可视化")
         plt.legend()
         plt.grid(True)
 
@@ -283,7 +344,7 @@ def visualize_data():
 
 # GUI界面
 def create_gui():
-    global root, dataset_id_input, time_scope_input, search_id, search_name, text_area
+    global root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area
 
     root = tk.Tk()
     root.title("国家统计局数据爬取与可视化工具")
@@ -303,13 +364,13 @@ def create_gui():
 
     # 查询条件输入
     tk.Label(root, text="查询内容（表序号）:").pack()
-    search_id = tk.Entry(root, width=30)
-    search_id.pack()
+    search_id_input = tk.Entry(root, width=30)
+    search_id_input.pack()
 
     # 查询条件输入
     tk.Label(root, text="查询内容（名称）:").pack()
-    search_name = tk.Entry(root, width=30)
-    search_name.pack()
+    search_name_input = tk.Entry(root, width=30)
+    search_name_input.pack()
 
     # 查询按钮
     tk.Button(root, text="查询数据", command=retrieve_data).pack()

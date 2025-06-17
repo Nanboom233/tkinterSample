@@ -40,7 +40,9 @@ def grabID(parent_id: str):
         )
         if item["isParent"]:
             grabID(item["id"])
-    time.sleep(0.05)
+
+    # Ensure the script doesn't run too fast and trigger anti-scraping measures
+    time.sleep(0)
 
 def init_id_dict() -> tuple:
     grabID(ROOT_ID)
