@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import requests
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-import IDGrabber
 
 # 模块的信息填写
 __author__ = "Nan"
@@ -31,6 +30,166 @@ previous_results = []  # 用于存储上一次查询的结果
 
 # tkinter 组件
 root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area = None, None, None, None, None, None
+
+# =============================================================
+# 数据库初始化部分
+# =============================================================
+ROOT_ID = "zb"
+
+
+class TreeNode:
+    def __init__(self, id: str, name: str, parent_id: str, is_parent: bool):
+        self.id = id
+        self.name = name
+        self.parent_id = parent_id
+        self.is_parent = is_parent
+
+
+def grabID(parent_id: str, id_dict: dict):
+    """
+    Recursively fetches dataset IDs and their metadata from the National Bureau of Statistics API.
+
+    This function sends a POST request to the API to retrieve child nodes of the given `parent_id`.
+    It parses the JSON response and populates the `id_dict` with `TreeNode` objects representing
+    the dataset hierarchy. If a node is a parent, the function recursively fetches its children.
+
+    Args:
+        parent_id (str): The ID of the parent node to fetch child nodes for.
+        id_dict (dict[str, TreeNode]): A dictionary to store the fetched nodes, where keys are node IDs
+            and values are `TreeNode` objects.
+
+    Raises:
+        Exception: If the API request fails or returns a non-200 status code.
+
+    Notes:
+        - The function includes a delay (`time.sleep`) to avoid triggering anti-scraping measures.
+        - The API URL is constructed dynamically based on the `parent_id`.
+
+    Returns:
+        None
+    """
+    url = f"https://data.stats.gov.cn/easyquery.htm?id={parent_id}&dbcode=hgyd&wdcode=zb&m=getTree"
+    response = requests.post(url, headers=HEADERS)
+    print(f"Fetching data from {url}...")
+    if response.status_code != 200:
+        raise Exception(f"Failed to fetch data from {url}, status code: {response.status_code}")
+    data = json.loads(response.text)
+    for item in data:
+        id_dict[item["id"]] = TreeNode(
+            id=item["id"],
+            name=item["name"],
+            parent_id=parent_id,
+            is_parent=item["isParent"]
+        )
+        if item["isParent"]:
+            grabID(item["id"], id_dict)
+
+    # Ensure the script doesn't run too fast and trigger anti-scraping measures
+    time.sleep(0)
+
+
+def gen_full_name(dataset_id: str, id_dict: dict[str:TreeNode]) -> str:
+    """Generates the full name of a dataset ID.
+
+    Args:
+        dataset_id (str): The ID of the dataset to retrieve the full name for.
+        id_dict (dict[str, TreeNode]): A dictionary mapping dataset IDs to their corresponding TreeNode objects.
+
+    Raises:
+        ValueError: If the dataset ID does not exist in the provided dictionary.
+
+    Returns:
+        str: The full name of the dataset ID, constructed by traversing its parent hierarchy.
+    """
+    if dataset_id not in id_dict:
+        raise ValueError(f"ID {self.id} 不存在于字典中。")
+
+    full_name = []
+    current_node = id_dict[dataset_id]
+
+    while current_node:
+        full_name.append(current_node.name)
+        if current_node.parent_id in id_dict:
+            current_node = id_dict[current_node.parent_id]
+        else:
+            break
+
+    return " -> ".join(reversed(full_name))
+
+
+def init_tables():
+    """
+    Initializes the database tables if they do not already exist.
+
+    This function checks for the existence of the `datasets` and `data_points` tables
+    in the SQLite database. If the tables are not found, it creates them with the
+    appropriate schema.
+
+    Also, if the `datasets` table does not exist, it initializes it with dataset IDs and names
+    which are fetched from https://data.stats.gov.cn/easyquery.htm?id=zb&dbcode=hgyd&wdcode=zb&m=getTree
+
+    Raises:
+        sqlite3.Error: If an error occurs during database operations.
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        # Check if the `datasets` table exists, if not, create and initialize it
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='datasets'
+        """)
+        if cursor.fetchone() is None:
+            id_dict = {}
+            leaf_node_dict = {}
+            grabID(ROOT_ID, id_dict)
+
+            # Add leaves to leaf_node_dict
+            for node_id, node in id_dict.items():
+                if not node.is_parent:
+                    leaf_node_dict[node_id] = node
+
+            cursor.execute('''
+                CREATE TABLE datasets (
+                    dataset_id TEXT PRIMARY KEY,
+                    dataset_name TEXT,            -- Name of the dataset
+                    dataset_full_name TEXT       -- Full name of the dataset, can be used for display
+                );
+            ''')
+            for leaf_node_id, leaf_node in leaf_node_dict.items():
+                # Check if the dataset already exists, if not, insert it
+                cursor.execute("SELECT dataset_id FROM datasets WHERE dataset_id = ?", (leaf_node_id,))
+                existing = cursor.fetchone()
+                if existing is None:
+                    cursor.execute("""
+                                   INSERT INTO datasets (dataset_id,dataset_name,dataset_full_name)
+                                   VALUES (?,?,?)
+                               """, (leaf_node_id, leaf_node.name, gen_full_name(leaf_node_id, id_dict)))
+
+        # Check if the `data_points` table exists, and create it if not
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='data_points'
+        """)
+        if cursor.fetchone() is None:
+            cursor.execute('''
+                CREATE TABLE data_points (
+                    dataset_id TEXT NOT NULL,
+                    time TEXT NOT NULL,                 -- Time string
+                    name TEXT NOT NULL,                 -- Indicator name string
+                    value REAL,                         -- Floating-point value
+                    FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id),
+                    UNIQUE(dataset_id, time, name)      -- Prevent duplicate data
+                );
+            ''')
+
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Database Error: {e.args[0]}")
+    finally:
+        print("Finished initializing database tables.")
+        conn.close()
 
 
 def get_full_name_by_id(dataset_id: str):
@@ -77,73 +236,6 @@ def get_name_by_id(dataset_id: str):
         messagebox.showerror("错误", f"数据集ID {dataset_id} 不存在。")
         return ""
     return dataset[0][1]
-
-
-def init_tables():
-    """
-    Initializes the database tables if they do not already exist.
-
-    This function checks for the existence of the `datasets` and `data_points` tables
-    in the SQLite database. If the tables are not found, it creates them with the
-    appropriate schema.
-
-    Also, if the `datasets` table does not exist, it initializes it with dataset IDs and names
-    which are fetched from https://data.stats.gov.cn/easyquery.htm?id=zb&dbcode=hgyd&wdcode=zb&m=getTree
-
-    Raises:
-        sqlite3.Error: If an error occurs during database operations.
-    """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    try:
-        # Check if the `datasets` table exists, if not, create and initialize it
-        cursor.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name='datasets'
-        """)
-        if cursor.fetchone() is None:
-            id_dict, leaf_node_dict = IDGrabber.init_id_dict()
-            cursor.execute('''
-                CREATE TABLE datasets (
-                    dataset_id TEXT PRIMARY KEY,
-                    dataset_name TEXT,            -- Name of the dataset
-                    dataset_full_name TEXT       -- Full name of the dataset, can be used for display
-                );
-            ''')
-            for leaf_node_id, leaf_node in leaf_node_dict.items():
-                # Check if the dataset already exists, if not, insert it
-                cursor.execute("SELECT dataset_id FROM datasets WHERE dataset_id = ?", (leaf_node_id,))
-                existing = cursor.fetchone()
-                if existing is None:
-                    cursor.execute("""
-                                   INSERT INTO datasets (dataset_id,dataset_name,dataset_full_name)
-                                   VALUES (?,?,?)
-                               """, (leaf_node_id, leaf_node.name, IDGrabber.get_full_name(leaf_node_id, id_dict)))
-
-        # Check if the `data_points` table exists, and create it if not
-        cursor.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name='data_points'
-        """)
-        if cursor.fetchone() is None:
-            cursor.execute('''
-                CREATE TABLE data_points (
-                    dataset_id TEXT NOT NULL,
-                    time TEXT NOT NULL,                 -- Time string
-                    name TEXT NOT NULL,                 -- Indicator name string
-                    value REAL,                         -- Floating-point value
-                    FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id),
-                    UNIQUE(dataset_id, time, name)      -- Prevent duplicate data
-                );
-            ''')
-
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"Database Error: {e.args[0]}")
-    finally:
-        print("Finished initializing database tables.")
-        conn.close()
 
 
 # 爬取数据并存入数据库
@@ -291,55 +383,48 @@ def retrieve_data():
 # 数据可视化
 def visualize_data():
     """可视化数据库中的数据"""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    dataset_id = search_id_input.get()
+
+    rows = previous_results
+
+    if not rows:
+        messagebox.showinfo("Info", "未找到匹配的数据进行可视化。")
+        return
+
+    # 准备数据进行可视化
+    times = [row[1] for row in rows]
+    values = [row[3] for row in rows]
+    names = list(set(f"{row[0]}{row[2]}" for row in rows))  # 获取唯一的指标名称
+
+    if len(names) > 1:
+        messagebox.showerror("Error", "当前仅支持单一指标的可视化。")
+        return
+
+    # 检查是否已有图表，如果没有则创建
+    if not plt.get_fignums():
+        plt.figure(figsize=(10, 5))
+
+    # 在当前图表上绘制
+    plt.plot(times, values, marker='o', label=names[0])
+    plt.xlabel("时间")
+    plt.ylabel("值")
+    plt.title(f"数据集 {get_name_by_id(rows[0][0])} 的可视化")
+    plt.legend()
+    plt.grid(True)
+
+    # 设置字体支持中文
+    plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
+    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+    # 在Tkinter中显示图表
+    global fig_canvas
     try:
-        rows = previous_results
+        fig_canvas.get_tk_widget().destroy()
+    except Exception:
+        pass
+    fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
+    fig_canvas.get_tk_widget().pack()
+    fig_canvas.draw()
 
-        if not rows:
-            messagebox.showinfo("Info", "未找到匹配的数据进行可视化。")
-            return
-
-        # 准备数据进行可视化
-        times = [row[1] for row in rows]
-        values = [row[3] for row in rows]
-        names = list(set(f"{row[0]}{row[2]}" for row in rows))  # 获取唯一的指标名称
-
-        if len(names) > 1:
-            messagebox.showerror("Error", "当前仅支持单一指标的可视化。")
-            return
-
-        # 检查是否已有图表，如果没有则创建
-        if not plt.get_fignums():
-            plt.figure(figsize=(10, 5))
-
-        # 在当前图表上绘制
-        plt.plot(times, values, marker='o', label=names[0])
-        plt.xlabel("时间")
-        plt.ylabel("值")
-        plt.title(f"数据集 {get_name_by_id(dataset_id)} 的可视化")
-        plt.legend()
-        plt.grid(True)
-
-        # 设置字体支持中文
-        plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
-        plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-
-        # 在Tkinter中显示图表
-        global fig_canvas
-        try:
-            fig_canvas.get_tk_widget().destroy()
-        except Exception:
-            pass
-        fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
-        fig_canvas.get_tk_widget().pack()
-        fig_canvas.draw()
-
-    except sqlite3.Error as e:
-        messagebox.showerror("Error", f"可视化数据时出错: {e}")
-    finally:
-        conn.close()
 
 
 # GUI界面
