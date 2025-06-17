@@ -10,9 +10,18 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import IDGrabber
 
+# 模块的信息填写
+__author__ = "Nan"
+__version__ = "1.0"
+__license__ = "None"
+
+# 默认的数据库存放路径
 db_path = 'data.db'
+
+# 设置requests请求头，模拟浏览器访问
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 "
+                  "Mobile Safari/537.36",
     'Accept': 'application/json, text/javascript, */*; q=0.01',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     'Referer': 'https://data.stats.gov.cn/easyquery.htm',  # 伪造来源页面
@@ -20,67 +29,71 @@ HEADERS = {
 }
 node_name_dicts = {}
 previous_rows = []  # 用于存储上一次查询的结果
-id_dict, leaves_dict = IDGrabber.init_id_dict()
 
 
 def init_tables():
-    """初始化数据库，如果表已存在则跳过创建"""
+    """
+    Initializes the database tables if they do not already exist.
+
+    This function checks for the existence of the `datasets` and `data_points` tables
+    in the SQLite database. If the tables are not found, it creates them with the
+    appropriate schema.
+
+    Also, if the `datasets` table does not exist, it initializes it with dataset IDs and names
+    which are fetched from https://data.stats.gov.cn/easyquery.htm?id=zb&dbcode=hgyd&wdcode=zb&m=getTree
+
+    Raises:
+        sqlite3.Error: If an error occurs during database operations.
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     try:
-        # 检查表是否存在并创建数据集表
+        # Check if the `datasets` table exists, if not, create and initialize it
         cursor.execute("""
-            SELECT name FROM sqlite_master 
+            SELECT name FROM sqlite_master
             WHERE type='table' AND name='datasets'
         """)
         if cursor.fetchone() is None:
             cursor.execute('''
                 CREATE TABLE datasets (
                     dataset_id TEXT PRIMARY KEY,
-                    dataset_name TEXT               -- 数据集名称
+                    dataset_name TEXT               -- Name of the dataset
                 );
             ''')
+            id_dict, leaf_node_dict = IDGrabber.init_id_dict()
+            for leaf_node_id, leaf_node in leaf_node_dict:
+                # Check if the dataset already exists, if not, insert it
+                cursor.execute("SELECT dataset_id FROM datasets WHERE dataset_id = ?", (leaf_node_id,))
+                existing = cursor.fetchone()
+                if existing is None:
+                    cursor.execute("""
+                                   INSERT INTO datasets (dataset_id,dataset_name)
+                                   VALUES (?,?)
+                               """, (leaf_node_id, leaf_node.name))
 
-        # 检查表是否存在并创建数据点表
+
+        # Check if the `data_points` table exists, and create it if not
         cursor.execute("""
-            SELECT name FROM sqlite_master 
+            SELECT name FROM sqlite_master
             WHERE type='table' AND name='data_points'
         """)
         if cursor.fetchone() is None:
             cursor.execute('''
                 CREATE TABLE data_points (
                     dataset_id TEXT NOT NULL,
-                    time TEXT NOT NULL,                 -- 时间字符串
-                    name TEXT NOT NULL,                 -- 指标名称字符串
-                    value REAL,                         -- 浮点数值
+                    time TEXT NOT NULL,                 -- Time string
+                    name TEXT NOT NULL,                 -- Indicator name string
+                    value REAL,                         -- Floating-point value
                     FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id),
-                    UNIQUE(dataset_id, time, name)      -- 防止重复数据
+                    UNIQUE(dataset_id, time, name)      -- Prevent duplicate data
                 );
             ''')
+
         conn.commit()
     except sqlite3.Error as e:
         print(f"An error occurred: {e.args[0]}")
     finally:
-        conn.close()
-
-
-def init_dataset(dataset_id: str):
-    """初始化数据集（如果不存在则创建）"""
-    conn = sqlite3.connect(db_path)
-    try:
-        cursor = conn.cursor()
-        # 检查数据集是否已存在
-        cursor.execute("SELECT dataset_id FROM datasets WHERE dataset_id = ?", (dataset_id,))
-        existing = cursor.fetchone()
-        if existing is None:
-            # 插入新数据集
-            cursor.execute("""
-                    INSERT INTO datasets (dataset_id,dataset_name)
-                    VALUES (?,?)
-                """, (dataset_id, id_dict[dataset_id].name))
-    finally:
-        conn.commit()
         conn.close()
 
 
@@ -119,9 +132,6 @@ def fetch_data():
     url = "https://data.stats.gov.cn/easyquery.htm?m=QueryData&dbcode=hgyd&rowcode=zb&colcode=sj&wds=[]" + dfwds_argument + time_argument
 
     try:
-        # 初始化数据集
-        init_dataset(source_name.get())
-
         response = requests.post(url, headers=HEADERS)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch data from {url}, status code: {response.status_code}")

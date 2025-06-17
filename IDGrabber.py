@@ -5,7 +5,7 @@ import requests
 
 ROOT_ID = "zb"
 id_dict = {}
-leaves_dict = {}
+leaf_node_dict = {}
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36",
     'Accept': 'application/json, text/javascript, */*; q=0.01',
@@ -47,9 +47,9 @@ def init_id_dict() -> tuple:
     # Add leaves to leaves_list
     for node_id, node in id_dict.items():
         if not node.is_parent:
-            leaves_dict[node_id] = node
+            leaf_node_dict[node_id] = node
 
-    return id_dict, leaves_dict
+    return id_dict, leaf_node_dict
 
 
 def get_full_name(id: str, id_dict: dict) -> str:
