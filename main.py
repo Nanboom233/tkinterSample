@@ -62,7 +62,7 @@ def init_tables():
                 );
             ''')
             id_dict, leaf_node_dict = IDGrabber.init_id_dict()
-            for leaf_node_id, leaf_node in leaf_node_dict:
+            for leaf_node_id, leaf_node in leaf_node_dict.items():
                 # Check if the dataset already exists, if not, insert it
                 cursor.execute("SELECT dataset_id FROM datasets WHERE dataset_id = ?", (leaf_node_id,))
                 existing = cursor.fetchone()
@@ -96,34 +96,10 @@ def init_tables():
     finally:
         conn.close()
 
-
-def insert_data_point(dataset_id, time, name, value):
-    """插入数据点（如果不存在）"""
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    try:
-        # 检查数据集ID是否存在
-        cursor.execute("SELECT 1 FROM datasets WHERE dataset_id = ?", (dataset_id,))
-        if cursor.fetchone() is None:
-            raise ValueError(f"数据集ID {dataset_id} 不存在，请先初始化数据集。")
-
-        # 尝试插入数据点
-        cursor.execute("""
-            INSERT INTO data_points (dataset_id, time, name, value)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(dataset_id, time, name) DO UPDATE SET value=excluded.value
-        """, (dataset_id, time, name, value))
-    except sqlite3.Error as e:
-        raise Exception(f"插入数据点错误: {str(e)}")
-    finally:
-        conn.commit()
-        conn.close()
-
-
 # 爬取数据并存入数据库
 def fetch_data():
     global node_name_dicts
-    # generate the URL
+    # building URL with source_name and time_scope arguments
     source_name_argument = '{"wdcode":"zb","valuecode":"' + source_name.get() + '"}'
     time_scope_argument = '{"wdcode":"sj","valuecode":"' + time_scope.get() + '"}'
 
@@ -162,7 +138,29 @@ def fetch_data():
             if node_name == "" or node_time == "":
                 raise ValueError("数据节点缺少必要的时间或名称信息。")
             # 插入数据点到数据库
-            insert_data_point(source_name.get(), node_time, node_name, data)
+            # insert_data_point(source_name.get(), node_time, node_name, data)
+            # def insert_data_point(dataset_id, time, name, value):
+
+            dataset_id = source_name.get()
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            try:
+                # 检查数据集ID是否存在
+                cursor.execute("SELECT 1 FROM datasets WHERE dataset_id = ?", (dataset_id,))
+                if cursor.fetchone() is None:
+                    raise ValueError(f"数据集ID {dataset_id} 不存在，请先初始化数据集。")
+
+                # 尝试插入数据点
+                cursor.execute("""
+                    INSERT INTO data_points (dataset_id, time, name, value)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(dataset_id, time, name) DO UPDATE SET value=excluded.value
+                """, (dataset_id, node_time, node_name, data))
+            except sqlite3.Error as e:
+                raise Exception(f"插入数据点错误: {str(e)}")
+            finally:
+                conn.commit()
+                conn.close()
 
         # cursor.execute('INSERT INTO data (url, content) VALUES (?, ?)', (url, response.text))
         # conn.commit()
