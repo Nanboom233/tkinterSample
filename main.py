@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import requests
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-
 # 模块的信息填写
 __author__ = "Nan"
 __version__ = "1.2"
@@ -28,18 +27,15 @@ HEADERS = {
 }
 previous_results = []  # 用于存储上一次查询的结果
 
-# tkinter 组件
-root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area = None, None, None, None, None, None
-
 # =============================================================
-# 数据库初始化部分
+#                       数据库初始化部分
 # =============================================================
 ROOT_ID = "zb"
 
 
 class TreeNode:
-    def __init__(self, id: str, name: str, parent_id: str, is_parent: bool):
-        self.id = id
+    def __init__(self, dataset_id: str, name: str, parent_id: str, is_parent: bool):
+        self.dataset_id = dataset_id
         self.name = name
         self.parent_id = parent_id
         self.is_parent = is_parent
@@ -76,7 +72,7 @@ def grabID(parent_id: str, id_dict: dict):
     data = json.loads(response.text)
     for item in data:
         id_dict[item["id"]] = TreeNode(
-            id=item["id"],
+            dataset_id=item["id"],
             name=item["name"],
             parent_id=parent_id,
             is_parent=item["isParent"]
@@ -102,7 +98,7 @@ def gen_full_name(dataset_id: str, id_dict: dict[str:TreeNode]) -> str:
         str: The full name of the dataset ID, constructed by traversing its parent hierarchy.
     """
     if dataset_id not in id_dict:
-        raise ValueError(f"ID {self.id} 不存在于字典中。")
+        raise ValueError(f"ID {self.dataset_id} 不存在于字典中。")
 
     full_name = []
     current_node = id_dict[dataset_id]
@@ -190,6 +186,11 @@ def init_tables():
     finally:
         print("Finished initializing database tables.")
         conn.close()
+
+
+# =============================================================
+#                         数据处理部分
+# =============================================================
 
 
 def get_full_name_by_id(dataset_id: str):
@@ -325,12 +326,25 @@ def fetch_data():
 
 # 从数据库中提取数据
 def retrieve_data():
-    """从数据库中提取数据并显示在文本区域"""
+    """Retrieve data from the database and display it in the text area.
+
+    This function queries the SQLite database for data points based on user-provided
+    search criteria (dataset name or dataset ID). The results are displayed in the
+    text area of the GUI. If no matching data is found, a message is displayed.
+
+    **Global Variables**:
+        - previous_results (list): Stores the results of the last query for potential use in visualization.
+
+    Raises:
+        sqlite3.Error: If an error occurs during database operations.
+
+    Returns:
+        None
+    """
     global previous_results
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    dataset_id = search_id_input.get()
     search_name = search_name_input.get()
     search_id = search_id_input.get()
     try:
@@ -354,10 +368,10 @@ def retrieve_data():
         rows = cursor.fetchall()
 
         # step 2: filter by dataset_id if specified
-        if search_id_input.get() != "":
+        if search_id != "":
             filtered_rows = []
             for row in rows:
-                if row[0] == search_id_input.get():
+                if row[0] == search_id:
                     filtered_rows.append(row)
             rows = filtered_rows
 
@@ -380,9 +394,21 @@ def retrieve_data():
         conn.close()
 
 
-# 数据可视化
+# =============================================================
+#                         数据可视化部分
+# =============================================================
 def visualize_data():
-    """可视化数据库中的数据"""
+    """Visualizes data from the database.
+
+    This function uses the `previous_results` global variable to retrieve data points
+    queried from the database and generates a line plot using Matplotlib. The plot
+    is displayed within the Tkinter GUI. If no data is available or multiple indicators
+    are present, appropriate error messages are shown.
+
+    Raises:
+        ValueError: If multiple indicators are present in the data, as only single
+            indicator visualization is supported.
+    """
 
     rows = previous_results
 
@@ -419,16 +445,42 @@ def visualize_data():
     global fig_canvas
     try:
         fig_canvas.get_tk_widget().destroy()
-    except Exception:
+    except AttributeError:
         pass
     fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
     fig_canvas.get_tk_widget().pack()
     fig_canvas.draw()
 
 
+# =============================================================
+#                         tkinter部分
+# =============================================================
+
+# tkinter 组件
+(
+    root,
+    dataset_id_input,
+    time_scope_input,
+    search_id_input,
+    search_name_input,
+    text_area,
+    fig_canvas
+) = None, None, None, None, None, None, None
+
 
 # GUI界面
 def create_gui():
+    """
+    Creates the graphical user interface (GUI) for the application.
+
+    This function initializes the main Tkinter window and adds various widgets
+    for user interaction, including input fields, buttons, and a text area for
+    displaying results. It also binds the buttons to their respective functions
+    for data fetching, querying, and visualization.
+
+    Returns:
+        None
+    """
     global root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area
 
     root = tk.Tk()
