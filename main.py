@@ -12,7 +12,7 @@ import IDGrabber
 
 # 模块的信息填写
 __author__ = "Nan"
-__version__ = "1.0"
+__version__ = "1.2"
 __license__ = "None"
 
 # 默认的数据库存放路径
@@ -27,7 +27,6 @@ HEADERS = {
     'Referer': 'https://data.stats.gov.cn/easyquery.htm',  # 伪造来源页面
     'X-Requested-With': 'XMLHttpRequest'  # 表明这是一个AJAX请求，很多网站会检查这个
 }
-node_name_dicts = {}
 previous_rows = []  # 用于存储上一次查询的结果
 
 
@@ -72,7 +71,6 @@ def init_tables():
                                    VALUES (?,?)
                                """, (leaf_node_id, leaf_node.name))
 
-
         # Check if the `data_points` table exists, and create it if not
         cursor.execute("""
             SELECT name FROM sqlite_master
@@ -96,26 +94,49 @@ def init_tables():
     finally:
         conn.close()
 
+
 # 爬取数据并存入数据库
 def fetch_data():
-    global node_name_dicts
-    # building URL with source_name and time_scope arguments
-    source_name_argument = '{"wdcode":"zb","valuecode":"' + source_name.get() + '"}'
-    time_scope_argument = '{"wdcode":"sj","valuecode":"' + time_scope.get() + '"}'
+    """
+    Fetches data from the National Bureau of Statistics API and stores it in the SQLite database.
 
+    This function constructs a URL based on user input for dataset ID and time scope, sends a POST request
+    to the API, and processes the returned JSON data. The data is then inserted or updated in the `data_points`
+    table of the SQLite database.
+
+    Args:
+        None
+
+    Raises:
+        Exception: If the API request fails or returns a non-200 status code.
+        ValueError: If the data node lacks necessary time or name information, or if the dataset ID does not exist
+                    in the database.
+        sqlite3.Error: If an error occurs during database operations.
+
+    Returns:
+        None
+    """
+    dataset_id, time_scope = dataset_id_input.get(), time_scope_input.get()
+    conn = sqlite3.connect(db_path)
+
+    # building URL with source_name and time_scope arguments
+    source_name_argument = '{"wdcode":"zb","valuecode":"' + dataset_id + '"}'
+    time_scope_argument = '{"wdcode":"sj","valuecode":"' + time_scope + '"}'
     dfwds_argument = f"&dfwds=[{source_name_argument},{time_scope_argument}]"
     time_argument = f'&k1={int(time.time())}&h=1'
-    url = "https://data.stats.gov.cn/easyquery.htm?m=QueryData&dbcode=hgyd&rowcode=zb&colcode=sj&wds=[]" + dfwds_argument + time_argument
+    base_url = "https://data.stats.gov.cn/easyquery.htm?m=QueryData&dbcode=hgyd&rowcode=zb&colcode=sj&wds=[]"
+    url = base_url + dfwds_argument + time_argument
 
     try:
         response = requests.post(url, headers=HEADERS)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch data from {url}, status code: {response.status_code}")
 
-        returndata = json.loads(response.text)["returndata"]
+        return_data = json.loads(response.text)["returndata"]
 
-        # read the node names from the JSON response and store them in a global dict
-        wdnodes = returndata["wdnodes"]
+        # read the node names from the JSON response and store them in a dict
+        node_name_dicts = {}
+        wdnodes = return_data["wdnodes"]
         for wdnode in wdnodes:
             wdcode = wdnode["wdcode"]
             if wdcode not in node_name_dicts:
@@ -124,8 +145,8 @@ def fetch_data():
             for node in nodes:
                 node_name_dicts[wdcode][node["code"]] = node["name"]
 
-        # translate the datanodes and transform the data
-        datanodes = returndata["datanodes"]
+        # transform the datanodes and transform the data
+        datanodes = return_data["datanodes"]
         for datanode in datanodes:
             data = datanode["data"]["data"]
             wds = datanode["wds"]
@@ -137,36 +158,29 @@ def fetch_data():
                     node_time = wd["valuecode"]
             if node_name == "" or node_time == "":
                 raise ValueError("数据节点缺少必要的时间或名称信息。")
-            # 插入数据点到数据库
-            # insert_data_point(source_name.get(), node_time, node_name, data)
-            # def insert_data_point(dataset_id, time, name, value):
 
-            dataset_id = source_name.get()
-            conn = sqlite3.connect(db_path)
+            # insert the data into the database
             cursor = conn.cursor()
-            try:
-                # 检查数据集ID是否存在
-                cursor.execute("SELECT 1 FROM datasets WHERE dataset_id = ?", (dataset_id,))
-                if cursor.fetchone() is None:
-                    raise ValueError(f"数据集ID {dataset_id} 不存在，请先初始化数据集。")
+            # Check if the dataset_id exists in the datasets table
+            cursor.execute("SELECT 1 FROM datasets WHERE dataset_id = ?", (dataset_id,))
+            if cursor.fetchone() is None:
+                raise ValueError(f"数据集ID {dataset_id} 不存在于数据库中，可能需要重新初始化数据库。")
 
-                # 尝试插入数据点
-                cursor.execute("""
-                    INSERT INTO data_points (dataset_id, time, name, value)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(dataset_id, time, name) DO UPDATE SET value=excluded.value
-                """, (dataset_id, node_time, node_name, data))
-            except sqlite3.Error as e:
-                raise Exception(f"插入数据点错误: {str(e)}")
-            finally:
-                conn.commit()
-                conn.close()
+            # insert or update the data point in the data_points table
+            cursor.execute("""
+                INSERT INTO data_points (dataset_id, time, name, value)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(dataset_id, time, name) DO UPDATE SET value=excluded.value
+            """, (dataset_id, node_time, node_name, data))
+            conn.commit()
 
-        # cursor.execute('INSERT INTO data (url, content) VALUES (?, ?)', (url, response.text))
-        # conn.commit()
-        messagebox.showinfo('Success', 'Data fetched and stored successfully!')
+        messagebox.showinfo("成功", f"成功获取了{len(datanodes)}条数据并存储于数据库中。")
+    except sqlite3.Error as e:
+        messagebox.showerror('数据库错误', f"在获取数据的过程中发生了数据库错误: {str(e)}")
     except Exception as e:
-        messagebox.showerror('Error', str(e))
+        messagebox.showerror('错误', f"在获取数据的过程中发生了未知错误: {str(e)}")
+    finally:
+        conn.close()
 
 
 # 从数据库中提取数据
@@ -269,20 +283,20 @@ def visualize_data():
 
 # GUI界面
 def create_gui():
-    global root, source_name, time_scope, search_id, search_name, text_area
+    global root, dataset_id_input, time_scope_input, search_id, search_name, text_area
 
     root = tk.Tk()
     root.title("国家统计局数据爬取与可视化工具")
 
     tk.Label(root, text="输入对应的表的序号:").pack()
-    source_name = tk.Entry(root, width=50)
-    source_name.insert(0, "A01030H")
-    source_name.pack()
+    dataset_id_input = tk.Entry(root, width=50)
+    dataset_id_input.insert(0, "A01030H")
+    dataset_id_input.pack()
 
     tk.Label(root, text="输入对应的时间:").pack()
-    time_scope = tk.Entry(root, width=50)
-    time_scope.insert(0, "LAST13")
-    time_scope.pack()
+    time_scope_input = tk.Entry(root, width=50)
+    time_scope_input.insert(0, "LAST13")
+    time_scope_input.pack()
 
     # 爬取按钮
     tk.Button(root, text="爬取数据", command=fetch_data).pack()

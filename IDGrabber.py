@@ -27,6 +27,7 @@ def grabID(parent_id: str):
     global id_dict
     url = f"https://data.stats.gov.cn/easyquery.htm?id={parent_id}&dbcode=hgyd&wdcode=zb&m=getTree"
     response = requests.post(url, headers=HEADERS)
+    print(f"Fetching data from {url}...")
     if response.status_code != 200:
         raise Exception(f"Failed to fetch data from {url}, status code: {response.status_code}")
     data = json.loads(response.text)
