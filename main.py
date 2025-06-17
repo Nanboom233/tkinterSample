@@ -5,14 +5,14 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import messagebox
 
-import matplotlib.pyplot as plt
 import matplotlib as mpl
+import matplotlib.pyplot as plt
 import requests
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # 模块的信息填写
 __author__ = "Nan"
-__version__ = "1.2"
+__version__ = "1.3"
 __license__ = "None"
 
 # 默认的数据库存放路径
@@ -193,6 +193,23 @@ def init_tables():
 # =============================================================
 #                         数据处理部分
 # =============================================================
+
+def get_dataset_choices():
+    """
+    Fetches all dataset information from the database and formats it for autocomplete functionality.
+
+    Returns:
+        dict: A dictionary where keys are dataset IDs and values are dataset names, e.g., {'A0101': '国民经济核算', ...}.
+    """
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT dataset_id, dataset_name FROM datasets")
+    all_indicators = cursor.fetchall()
+    conn.close()
+
+    # 格式化为所需的字典
+    return {indicator_id: indicator_name for indicator_id, indicator_name in all_indicators}
 
 
 def get_full_name_by_id(dataset_id: str):
@@ -414,7 +431,7 @@ def visualize_data():
         ValueError: If multiple indicators are present in the data, as only single
             indicator visualization is supported.
     """
-    global fig_canvas, viz_group  # 引用全局图表小部件
+    global fig_canvas  # 引用全局图表小部件
 
     rows = previous_results
 
@@ -435,6 +452,10 @@ def visualize_data():
     if not plt.get_fignums():
         plt.figure(figsize=(10, 5))
 
+    # 设置字体支持中文
+    mpl.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # 使用黑体
+    mpl.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
     # 在当前图表上绘制
     plt.plot(times, values, marker='o', label=names[0])
     plt.xlabel("时间")
@@ -445,15 +466,16 @@ def visualize_data():
     plt.gcf().autofmt_xdate(rotation=45)  # 自动调整x轴标签以防重叠
     plt.tight_layout()  # 调整布局
 
-    # 设置字体支持中文
-    mpl.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
-    mpl.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+    try:
+        fig_canvas.get_tk_widget().destroy()
+    except AttributeError:
+        pass
 
     # 在Tkinter中显示图表
     fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=viz_group)
-    fig_canvas.draw()
     # 使用 pack 将图表小部件放入 fig_canvas 框架中并使其填满
     fig_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    fig_canvas.draw()
 
 
 # =============================================================
@@ -472,6 +494,309 @@ def visualize_data():
 ) = None, None, None, None, None, None, None
 
 
+class AutocompleteEntry(ttk.Entry):
+    """
+    AutocompleteEntry is an enhanced input field with autocomplete functionality.
+
+    **Features**:
+        - Displays all options when the input field is empty.
+        - Supports fuzzy search by ID or name.
+        - Shows dropdown options in the format "ID - Name".
+
+    Attributes: master (tk.Widget): The parent widget. completion_dict (dict): A dictionary where keys are IDs and
+    values are names, e.g., {'A0101': 'Economic Accounting'}. kwargs: Additional parameters for ttk.Entry.
+
+    Methods:
+        set_completion_list(completion_dict):
+            Updates the autocomplete data source.
+
+        _on_focus_in(event):
+            Handles focus-in events to display all options if the input field is empty.
+
+        _on_focus_out(event):
+            Handles focus-out events to destroy the autocomplete dropdown if focus is lost.
+
+        _destroy_toplevel_if_safe():
+            Safely destroys the autocomplete dropdown after a delay if focus is not on the input field or dropdown.
+
+        _on_keyrelease(event):
+            Handles key release events to update the autocomplete dropdown.
+
+        _update_autocomplete(show_all=False):
+            Updates and displays the autocomplete dropdown based on the current input.
+
+        _show_toplevel():
+            Creates and displays the autocomplete dropdown.
+
+        _move_selection(keysym):
+            Moves the selection in the autocomplete dropdown using arrow keys.
+
+        _select_item():
+            Selects the currently highlighted item in the autocomplete dropdown.
+
+        _on_click(event):
+            Handles mouse click events to select an item from the autocomplete dropdown.
+    """
+
+    def __init__(self, master=None, completion_dict=None, **kwargs):
+        """
+        Args: master (tk.Widget): The parent widget. completion_dict (dict): A dictionary where keys are IDs and
+        values are names, e.g., {'A0101': 'Economic Accounting'}. **kwargs: Additional parameters for `ttk.Entry`.
+        """
+
+        super().__init__(master, **kwargs)
+
+        self._completion_list = []
+        self.set_completion_list(completion_dict if completion_dict else {})
+
+        self._hits = []
+        self._hit_index = 0
+        self.toplevel = None
+
+        # 绑定事件
+        self.bind('<KeyRelease>', self._on_keyrelease)
+        # 需求1：绑定点击事件，用于处理空输入框点击
+        self.bind('<FocusIn>', self._on_focus_in)
+        # 绑定焦点移出事件，用于销毁下拉窗口
+        self.bind('<FocusOut>', self._on_focus_out)
+
+    def set_completion_list(self, completion_dict):
+        """
+        Updates the autocomplete data source.
+
+        Args:
+            completion_dict (dict): A dictionary where keys are dataset IDs and values are dataset names.
+                Example: {'A0101': '国民经济核算', ...}.
+        """
+        # 将字典转换为元组列表 [(id, name), ...] 以便排序和搜索
+        self._completion_list = sorted(list(completion_dict.items()), key=lambda x: x[0])
+
+    def _on_focus_in(self, event):
+        """当输入框获得焦点时调用"""
+        # 需求1：如果输入框为空，则显示所有选项
+        if not self.get():
+            self._update_autocomplete(show_all=True)
+
+    def _on_focus_out(self, event):
+        """
+        Handles the focus-out event for the input field.
+
+        If the input field loses focus, this method delays the destruction of the autocomplete dropdown.
+        However, if the new focus is within the autocomplete dropdown or its child components, the dropdown
+        is not destroyed.
+
+        Args:
+            event (tk.Event): The focus-out event triggered by the input field.
+
+        Returns:
+            None
+        """
+        # 如果补全窗口存在，并且新的焦点在补全窗口或其子组件上，则不销毁
+        if self.toplevel:
+            focused_widget = self.winfo_toplevel().focus_get()
+            if focused_widget == self.toplevel or (hasattr(focused_widget, 'master')
+                                                   and focused_widget.master == self.toplevel):
+                return  # 焦点在内部，什么都不做
+
+        # 否则，延迟销毁
+        self.after(150, self._destroy_toplevel_if_safe)
+
+    def _destroy_toplevel_if_safe(self):
+        """
+        Safely destroys the autocomplete dropdown after a delay if the focus is not on the input field or the dropdown.
+
+        This method ensures that the autocomplete dropdown is destroyed only if the focus has moved away from the
+        input field and the dropdown. It checks the current focused widget and delays the destruction to avoid abrupt
+        behavior.
+
+        Returns:
+            None
+        """
+        if self.toplevel:
+            focused_widget = self.winfo_toplevel().focus_get()
+            if focused_widget != self and (
+                    not hasattr(focused_widget, 'master') or focused_widget.master != self.toplevel):
+                self.toplevel.destroy()
+                self.toplevel = None
+
+    def _on_keyrelease(self, event):
+        """处理按键释放事件"""
+        if event.keysym in ("Up", "Down"):
+            self._move_selection(event.keysym)
+            return
+
+        if event.keysym in ("Return", "Tab"):
+            self._select_item()
+            return
+
+        if event.keysym == "Escape":
+            self._destroy_toplevel()
+            return
+
+        # 对于其他按键，更新补全列表
+        self._update_autocomplete()
+
+    def _update_autocomplete(self, show_all=False):
+        """根据当前输入更新并显示补全列表。"""
+        if self.toplevel:
+            self.toplevel.destroy()
+            self.toplevel = None
+
+        current_text = self.get().lower()
+
+        if show_all:
+            self._hits = self._completion_list
+        else:
+            if not current_text:
+                return
+            # 需求2：同时搜索ID和名称
+            self._hits = [
+                item for item in self._completion_list
+                if current_text in item[0].lower() or current_text in item[1].lower()
+            ]
+
+        if self._hits:
+            self._hit_index = 0
+            self._show_toplevel()
+
+    def _show_toplevel(self):
+        """Creates and displays the autocomplete dropdown.
+
+        This method initializes a `tk.Toplevel` widget to serve as the autocomplete dropdown
+        and populates it with matching suggestions based on the user's input. The dropdown
+        is positioned below the input field and allows the user to select an item either
+        via keyboard navigation or mouse clicks.
+
+        Attributes:
+            self.toplevel (tk.Toplevel): The autocomplete dropdown widget.
+            self._hits (list): The list of autocomplete suggestions.
+
+        Raises:
+            None
+
+        Returns:
+            None
+        """
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+
+        self.toplevel = tk.Toplevel(self)
+        self.toplevel.wm_overrideredirect(True)
+        self.toplevel.wm_geometry(f"+{x}+{y}")
+        self.toplevel.attributes('-topmost', True)  # 确保窗口在最上层
+
+        listbox = tk.Listbox(self.toplevel, selectbackground='#cce8ff', exportselection=False,
+                             width=self.cget('width') + 15)
+        listbox.pack(fill=tk.BOTH, expand=True)
+
+        for item_id, item_name in self._hits:
+            listbox.insert(tk.END, f"{item_id} - {item_name}")
+
+        listbox.selection_set(0)
+
+        listbox.bind("<ButtonRelease-1>", self._on_click)
+        listbox.bind("<Return>", lambda e: self._select_item())
+        # 允许鼠标进入Listbox而不导致父Entry失去焦点
+        listbox.bind("<FocusIn>", lambda e: self.focus_set())
+
+    def _move_selection(self, keysym):
+        """Moves the selection in the autocomplete dropdown using arrow keys.
+
+        This method handles the movement of the selection in the autocomplete dropdown
+        when the user presses the "Up" or "Down" arrow keys. It updates the currently
+        highlighted item in the dropdown and ensures the selected item is visible.
+
+        Args:
+            keysym (str): The key symbol representing the pressed key. Expected values
+                are "Up" or "Down".
+
+        Returns:
+            None
+        """
+        if not self.toplevel or not self._hits:
+            return
+
+        listbox = self.toplevel.winfo_children()[0]
+        max_items = len(self._hits)
+
+        if keysym == "Down":
+            self._hit_index = (self._hit_index + 1) % max_items
+        elif keysym == "Up":
+            self._hit_index = (self._hit_index - 1 + max_items) % max_items
+
+        listbox.selection_clear(0, tk.END)
+        listbox.selection_set(self._hit_index)
+        listbox.see(self._hit_index)
+
+    def _select_item(self):
+        """Selects the currently highlighted item in the autocomplete dropdown.
+
+        This method retrieves the selected item from the autocomplete dropdown, updates the input field
+        with the selected value, and ensures the dropdown is closed. It also refocuses the input field
+        and moves the cursor to the end of the text.
+
+        Attributes:
+            self.toplevel (tk.Toplevel): The autocomplete dropdown widget.
+            self._hits (list): The list of autocomplete suggestions.
+
+        Raises:
+            None
+
+        Returns:
+            None
+        """
+        if self.toplevel and self._hits:
+            # 1. 获取选中的ID
+            selected_id = self._hits[self._hit_index][0]
+
+            # 2. 销毁窗口
+            self.toplevel.destroy()
+            self.toplevel = None
+
+            # 3. 更新输入框内容
+            self.delete(0, tk.END)
+            self.insert(0, selected_id)
+
+            # 4. 将焦点强制移回输入框
+            self.focus_set()
+            self.icursor(tk.END)  # 将光标移动到末尾
+
+    def _on_click(self, event):
+        """
+        Handles mouse click events on the autocomplete dropdown.
+
+        This method uses `listbox.nearest(event.y)` to accurately determine the clicked item
+        based on the vertical position of the mouse event. It ensures that clicks on empty
+        areas of the listbox are ignored.
+
+        Args:
+            event (tk.Event): The mouse click event triggered on the listbox.
+
+        Returns:
+            None
+        """
+        if not self.toplevel:
+            return
+
+        listbox = event.widget
+
+        # 使用 event.y 坐标获取被点击的列表项索引
+        try:
+            clicked_index = listbox.nearest(event.y)
+            # 如果点击到列表框的空白区域，nearest可能会返回-1，需要忽略
+            if clicked_index < 0:
+                return
+        except tk.TclError:
+            # 如果列表为空，调用 nearest 会报错
+            return
+
+        # 更新 self._hit_index 为实际点击的索引
+        self._hit_index = clicked_index
+
+        # 调用选择函数来完成后续操作
+        self._select_item()
+
+
 # GUI界面
 def create_gui():
     """
@@ -485,7 +810,8 @@ def create_gui():
     The layout is enhanced using ttk widgets, padding, and logical grouping for
     a more modern and user-friendly appearance.
     """
-    global root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area, fig_canvas, viz_group
+    global root, dataset_id_input, time_scope_input, search_id_input, \
+        search_name_input, text_area, fig_canvas, viz_group
 
     root = tk.Tk()
     root.title("国家统计局数据爬取与可视化工具")
@@ -507,7 +833,15 @@ def create_gui():
     dataset_id_frame = ttk.Frame(fetch_group)
     dataset_id_frame.pack(fill=tk.X, padx=5, pady=5)
     ttk.Label(dataset_id_frame, text="表的序号:", width=12).pack(side=tk.LEFT)
-    dataset_id_input = ttk.Entry(dataset_id_frame)
+
+    # 获取自动补全字典
+    try:
+        all_datasets_dict = get_dataset_choices()
+    except Exception as e:
+        print(f"无法加载数据集列表：{e}")
+        all_datasets_dict = {"A01030H": "示例数据"}
+
+    dataset_id_input = AutocompleteEntry(dataset_id_frame, completion_dict=all_datasets_dict, width=30)
     dataset_id_input.insert(0, "A01030H")
     dataset_id_input.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -533,7 +867,8 @@ def create_gui():
     search_id_frame = ttk.Frame(query_group)
     search_id_frame.pack(fill=tk.X, padx=5, pady=5)
     ttk.Label(search_id_frame, text="查询 (表序号):", width=12).pack(side=tk.LEFT)
-    search_id_input = ttk.Entry(search_id_frame)
+
+    search_id_input = AutocompleteEntry(search_id_frame, completion_dict=all_datasets_dict, width=30)
     search_id_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
     ttk.Button(search_id_frame, text="查询", command=retrieve_data).pack(side=tk.LEFT)
 
