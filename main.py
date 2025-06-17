@@ -2,9 +2,11 @@ import json
 import sqlite3
 import time
 import tkinter as tk
+import tkinter.ttk as ttk
 from tkinter import messagebox
 
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import requests
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
@@ -377,6 +379,7 @@ def retrieve_data():
 
         previous_results = rows
 
+        text_area.config(state=tk.NORMAL)  # 临时启用来允许编辑
         # 清空文本区域并显示查询结果
         text_area.delete(1.0, tk.END)
 
@@ -387,6 +390,8 @@ def retrieve_data():
                                          f"组ID:{row[0]},时间: {row[1]}, 名称: {row[2]}, 值: {row[3]}\n")
         else:
             text_area.insert(tk.END, "未找到匹配的数据。\n")
+
+        text_area.config(state=tk.DISABLED)  # 设为禁用状态后，无法编辑，但可以复制
 
     except sqlite3.Error as e:
         messagebox.showerror("Error", f"查询数据时出错: {e}")
@@ -409,6 +414,7 @@ def visualize_data():
         ValueError: If multiple indicators are present in the data, as only single
             indicator visualization is supported.
     """
+    global fig_canvas, viz_group  # 引用全局图表小部件
 
     rows = previous_results
 
@@ -436,20 +442,18 @@ def visualize_data():
     plt.title(f"数据集 {get_name_by_id(rows[0][0])} 的可视化")
     plt.legend()
     plt.grid(True)
+    plt.gcf().autofmt_xdate(rotation=45)  # 自动调整x轴标签以防重叠
+    plt.tight_layout()  # 调整布局
 
     # 设置字体支持中文
-    plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
-    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+    mpl.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
+    mpl.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
     # 在Tkinter中显示图表
-    global fig_canvas
-    try:
-        fig_canvas.get_tk_widget().destroy()
-    except AttributeError:
-        pass
-    fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=root)
-    fig_canvas.get_tk_widget().pack()
+    fig_canvas = FigureCanvasTkAgg(plt.gcf(), master=viz_group)
     fig_canvas.draw()
+    # 使用 pack 将图表小部件放入 fig_canvas 框架中并使其填满
+    fig_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
 
 # =============================================================
@@ -478,46 +482,92 @@ def create_gui():
     displaying results. It also binds the buttons to their respective functions
     for data fetching, querying, and visualization.
 
-    Returns:
-        None
+    The layout is enhanced using ttk widgets, padding, and logical grouping for
+    a more modern and user-friendly appearance.
     """
-    global root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area
+    global root, dataset_id_input, time_scope_input, search_id_input, search_name_input, text_area, fig_canvas, viz_group
 
     root = tk.Tk()
     root.title("国家统计局数据爬取与可视化工具")
+    root.geometry("1400x550")
 
-    tk.Label(root, text="输入对应的表的序号:").pack()
-    dataset_id_input = tk.Entry(root, width=50)
+    paned_window = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
+    paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    left_frame = ttk.Frame(paned_window, padding="10")
+    paned_window.add(left_frame, weight=1)
+
+    right_frame = ttk.Frame(paned_window, padding="10")
+    paned_window.add(right_frame, weight=7)
+
+    # --- 1. 数据爬取区域 ---
+    fetch_group = ttk.LabelFrame(left_frame, text="数据爬取")
+    fetch_group.pack(fill=tk.X, pady=(0, 10))
+
+    dataset_id_frame = ttk.Frame(fetch_group)
+    dataset_id_frame.pack(fill=tk.X, padx=5, pady=5)
+    ttk.Label(dataset_id_frame, text="表的序号:", width=12).pack(side=tk.LEFT)
+    dataset_id_input = ttk.Entry(dataset_id_frame)
     dataset_id_input.insert(0, "A01030H")
-    dataset_id_input.pack()
+    dataset_id_input.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    tk.Label(root, text="输入对应的时间:").pack()
-    time_scope_input = tk.Entry(root, width=50)
+    time_scope_frame = ttk.Frame(fetch_group)
+    time_scope_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+    ttk.Label(time_scope_frame, text="时间范围:", width=12).pack(side=tk.LEFT)
+    time_scope_input = ttk.Entry(time_scope_frame)
     time_scope_input.insert(0, "LAST13")
-    time_scope_input.pack()
+    time_scope_input.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-    # 爬取按钮
-    tk.Button(root, text="爬取数据", command=fetch_data).pack()
+    # --- ** 新增的说明标签 ** ---
+    info_text = "格式示例: 月: 202401,202405 | 季: 2024A,2024B | 年: 2023,2024 | 其他: last13, 2023-"
+    info_label = ttk.Label(fetch_group, text=info_text, foreground="gray50", justify=tk.LEFT)
+    info_label.pack(fill=tk.X, padx=5, pady=(0, 10))
+    # --- ** 新增内容结束 ** ---
 
-    # 查询条件输入
-    tk.Label(root, text="查询内容（表序号）:").pack()
-    search_id_input = tk.Entry(root, width=30)
-    search_id_input.pack()
+    ttk.Button(fetch_group, text="爬取数据", command=fetch_data).pack(fill=tk.X, padx=5, pady=5)
 
-    # 查询条件输入
-    tk.Label(root, text="查询内容（名称）:").pack()
-    search_name_input = tk.Entry(root, width=30)
-    search_name_input.pack()
+    # --- 2. 数据查询区域 ---
+    query_group = ttk.LabelFrame(left_frame, text="本地数据查询")
+    query_group.pack(fill=tk.X, pady=10)
 
-    # 查询按钮
-    tk.Button(root, text="查询数据", command=retrieve_data).pack()
+    search_id_frame = ttk.Frame(query_group)
+    search_id_frame.pack(fill=tk.X, padx=5, pady=5)
+    ttk.Label(search_id_frame, text="查询 (表序号):", width=12).pack(side=tk.LEFT)
+    search_id_input = ttk.Entry(search_id_frame)
+    search_id_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+    ttk.Button(search_id_frame, text="查询", command=retrieve_data).pack(side=tk.LEFT)
 
-    # 结果显示区域
-    text_area = tk.Text(root, height=15, width=80)
-    text_area.pack()
+    search_name_frame = ttk.Frame(query_group)
+    search_name_frame.pack(fill=tk.X, padx=5, pady=5)
+    ttk.Label(search_name_frame, text="查询 (名称):", width=12).pack(side=tk.LEFT)
+    search_name_input = ttk.Entry(search_name_frame)
+    search_name_input.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+    ttk.Button(search_name_frame, text="查询", command=retrieve_data).pack(side=tk.LEFT)
 
-    # 可视化按钮
-    tk.Button(root, text="可视化数据", command=visualize_data).pack()
+    # --- 3. 结果输出区域 ---
+    output_group = ttk.LabelFrame(left_frame, text="结果输出")
+    output_group.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+    text_container = ttk.Frame(output_group)
+    text_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    text_area = tk.Text(text_container, height=10, width=50, wrap=tk.WORD, relief=tk.FLAT)
+    text_area.config(state=tk.DISABLED)
+
+    scrollbar = ttk.Scrollbar(text_container, orient=tk.VERTICAL, command=text_area.yview)
+    text_area.configure(yscrollcommand=scrollbar.set)
+
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    ttk.Button(left_frame, text="可视化选中数据", command=visualize_data).pack(fill=tk.X, pady=5)
+
+    # --- 5. 可视化图表区域 ---
+    viz_group = ttk.LabelFrame(right_frame, text="数据可视化图表")
+    viz_group.pack(fill=tk.BOTH, expand=True)
+
+    fig_canvas = tk.Frame(viz_group)
+    fig_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
     root.mainloop()
 
